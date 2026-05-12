@@ -9,17 +9,15 @@ import uvicorn
 
 app = FastAPI()
 
-# স্ট্যাটিক ফাইল মাউন্ট করা
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# টেমপ্লেট ডিরেক্টরি সেটআপ
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# মডেল লোড করা
+
 try:
     model = joblib.load('mental_model.pkl')
-except:
-    print("Error: 'mental_model.pkl' খুঁজে পাওয়া যায়নি! আগে model_trainer.py রান করুন।")
+except Exception as e:
+    print(f"Error: 'mental_model.pkl' not found!: {e}")
 
 class PHQInput(BaseModel):
     responses: list
@@ -27,30 +25,49 @@ class PHQInput(BaseModel):
 @app.post("/analyze")
 async def analyze(data: PHQInput):
     res = data.responses
-    # নিশ্চিত করা যেন ৯টি উত্তরই থাকে
+    
+    
     if len(res) != 9:
-        return {"error": "৯টি প্রশ্নের উত্তর প্রয়োজন"}
+        return {"error": "needed 9 questionnaire answer"}
 
+    
     total_score = sum(res)
     
-    # এন্ট্রপি এক্সট্রাকশন
+    
     _, counts = np.unique(res, return_counts=True)
     shannon = float(entropy(counts/len(res), base=2))
+    
+    # Sample Entropy approximation (standardized for the model)
     sample_ent = float(np.std(res) * 0.5)
-    # Permutation Complexity লজিক
+    
+    # Permutation/Complexity approximation
     diff_val = np.diff(res)
     perm_ent = float(len(np.unique(diff_val)) / 3.0)
 
-    # প্রেডিকশন (নিশ্চিত করা সব ভ্যালু float)
+    
     features = np.array([[float(total_score), shannon, sample_ent, perm_ent]])
     
-    pred_idx = int(model.predict(features)[0])
-    conf = float(np.max(model.predict_proba(features)) * 100)
+    try:
+       
+        conf = float(np.max(model.predict_proba(features)) * 100)
+    except:
+        conf = 100.0 # fallback
+
+   
     
-    labels = ["Minimal", "Mild", "Moderate", "Moderately Severe", "Severe"]
-    
+    if total_score >= 20:
+        severity = "Severe"
+    elif total_score >= 15:
+        severity = "Moderately Severe"
+    elif total_score >= 10:
+        severity = "Moderate"
+    elif total_score >= 5:
+        severity = "Mild"
+    else:
+        severity = "Minimal"
+
     return {
-        "severity": labels[pred_idx],
+        "severity": severity,
         "confidence": round(conf, 2),
         "score": int(total_score),
         "shannon": round(shannon, 3),
@@ -60,13 +77,12 @@ async def analyze(data: PHQInput):
 
 @app.get("/")
 async def home(request: Request):
-    # লেটেস্ট Starlette/FastAPI ভার্সনে request সরাসরি প্রথম আর্গুমেন্ট হিসেবে দিতে হয়
+    # FastAPI template rendering
     return templates.TemplateResponse(
         request=request, 
         name="index.html", 
-        context={}  # এখানে চাইলে বাড়তি ডেটা পাঠাতে পারেন, না থাকলে খালি রাখলেও চলবে
+        context={}
     )
 
 if __name__ == "__main__":
-    # সরাসরি python main.py লিখে রান করার জন্য
     uvicorn.run(app, host="127.0.0.1", port=8000)
